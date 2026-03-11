@@ -181,7 +181,7 @@ klasifikasi_wechsler <- function(iq) {
                  "Average", "High Average", "Superior", "Very Superior"))
 }
 
-# Fungsi untuk menghasilkan tabel item analysis CTT
+# Fungsi untuk menghasilkan tabel item analysis CTT (komprehensif)
 item_analysis_ctt <- function(data_items, subtes_name) {
   ia <- suppressWarnings(psych::alpha(data_items, check.keys = TRUE))
 
@@ -192,18 +192,49 @@ item_analysis_ctt <- function(data_items, subtes_name) {
         paste(reversed_items, collapse = ", "), "\n")
   }
 
+  # Skor total per responden
+  total_score <- rowSums(data_items, na.rm = TRUE)
+  n_resp <- nrow(data_items)
+
+  # --- Analisis kelompok atas-bawah (27%) ---
+  n27 <- max(1, floor(n_resp * 0.27))
+  rank_order <- order(total_score, decreasing = TRUE)
+  idx_upper <- rank_order[1:n27]
+  idx_lower <- rank_order[(n_resp - n27 + 1):n_resp]
+
+  # Proporsi benar kelompok atas & bawah, dan indeks diskriminasi D
+  p_upper <- colMeans(data_items[idx_upper, , drop = FALSE], na.rm = TRUE)
+  p_lower <- colMeans(data_items[idx_lower, , drop = FALSE], na.rm = TRUE)
+  D_index <- p_upper - p_lower
+
+  # --- Point-biserial / korelasi item-total (uncorrected) ---
+  r_pbis <- sapply(seq_len(ncol(data_items)), function(i) {
+    cor(data_items[, i], total_score, use = "pairwise.complete.obs")
+  })
+
+  # --- Item reliability index = r_it * SD_item ---
+  sd_items <- apply(data_items, 2, sd, na.rm = TRUE)
+  item_rel_index <- ia$item.stats$r.cor * sd_items
+
   item_stats <- data.frame(
     Item = colnames(data_items),
     Mean = round(colMeans(data_items, na.rm = TRUE), 3),
-    SD = round(apply(data_items, 2, sd, na.rm = TRUE), 3),
+    SD = round(sd_items, 3),
+    r_pbis = round(r_pbis, 3),
     r_item_total = round(ia$item.stats$r.cor, 3),
     r_drop = round(ia$item.stats$r.drop, 3),
     alpha_if_deleted = round(ia$alpha.drop$raw_alpha, 3),
+    p_upper = round(p_upper, 3),
+    p_lower = round(p_lower, 3),
+    D_index = round(D_index, 3),
+    item_rel_index = round(item_rel_index, 3),
     reversed = colnames(data_items) %in% reversed_items,
     stringsAsFactors = FALSE
   )
+
   # Untuk dikotomis, Mean = proporsi benar = tingkat kesulitan
-  if (all(data_items %in% c(0, 1), na.rm = TRUE)) {
+  is_dichotomous <- all(data_items %in% c(0, 1), na.rm = TRUE)
+  if (is_dichotomous) {
     item_stats$p_difficulty <- item_stats$Mean
     item_stats$kategori_difficulty <- ifelse(
       item_stats$p_difficulty < 0.20, "Sangat Sulit",
@@ -211,11 +242,27 @@ item_analysis_ctt <- function(data_items, subtes_name) {
              ifelse(item_stats$p_difficulty < 0.60, "Sedang",
                     ifelse(item_stats$p_difficulty < 0.80, "Mudah", "Sangat Mudah"))))
   }
+
+  # Kategori daya beda berdasarkan r_item_total (corrected)
   item_stats$kategori_daya_beda <- ifelse(
     item_stats$r_item_total < 0.10, "Sangat Rendah",
     ifelse(item_stats$r_item_total < 0.20, "Rendah",
            ifelse(item_stats$r_item_total < 0.30, "Cukup",
                   ifelse(item_stats$r_item_total < 0.40, "Baik", "Sangat Baik"))))
+
+  # Kategori indeks diskriminasi D
+  item_stats$kategori_D <- ifelse(
+    item_stats$D_index < 0.10, "Sangat Rendah",
+    ifelse(item_stats$D_index < 0.20, "Rendah",
+           ifelse(item_stats$D_index < 0.30, "Cukup",
+                  ifelse(item_stats$D_index < 0.40, "Baik", "Sangat Baik"))))
+
+  # Keputusan akhir item
+  item_stats$keputusan <- ifelse(
+    item_stats$r_item_total < 0.10 | item_stats$D_index < 0.10, "Ditolak",
+    ifelse(item_stats$r_item_total < 0.20 | item_stats$D_index < 0.20, "Direvisi",
+           "Diterima"))
+
   return(item_stats)
 }
 
@@ -270,6 +317,82 @@ for (s in names(subtests)) {
 
 cat("\n--- Ringkasan Reliabilitas Semua Subtes ---\n")
 print(reliability_summary[, c("Subtes","Jumlah_Item","Alpha","Alpha_Std","Mean_r_IT","SEM")])
+
+# ==============================================================================
+# 4b. ANALISIS BUTIR AITEM KOMPREHENSIF
+# ==============================================================================
+
+cat("\n>>> [2b] Analisis Butir Aitem Komprehensif...\n\n")
+
+# --- Ringkasan kualitas item per subtes ---
+item_quality_summary <- data.frame(
+  Subtes = character(), Nama = character(),
+  Jumlah_Item = integer(),
+  Diterima = integer(), Direvisi = integer(), Ditolak = integer(),
+  Mean_D_Index = numeric(), Mean_r_pbis = numeric(),
+  Mean_r_it_corrected = numeric(),
+  Mean_Item_Rel_Index = numeric(),
+  Mean_Inter_Item_r = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (s in names(subtests)) {
+  cat("--- Analisis Butir:", s, "-", subtest_names[s], "---\n")
+
+  ia <- ctt_results[[s]]$item_analysis
+  items <- data_raw[, subtests[[s]]]
+
+  # Inter-item correlation
+  iic <- cor(items, use = "pairwise.complete.obs")
+  diag(iic) <- NA
+  mean_iic <- mean(iic, na.rm = TRUE)
+  ctt_results[[s]]$inter_item_cor <- iic
+
+  # Tabel ringkasan item
+  cat("   Jumlah item:", nrow(ia), "\n")
+  cat("   Item diterima :", sum(ia$keputusan == "Diterima"), "\n")
+  cat("   Item perlu revisi:", sum(ia$keputusan == "Direvisi"), "\n")
+  cat("   Item ditolak :", sum(ia$keputusan == "Ditolak"), "\n")
+  cat("   Mean D-index    :", round(mean(ia$D_index, na.rm = TRUE), 3), "\n")
+  cat("   Mean r(pbis)    :", round(mean(ia$r_pbis, na.rm = TRUE), 3), "\n")
+  cat("   Mean r(it) corr :", round(mean(ia$r_item_total, na.rm = TRUE), 3), "\n")
+  cat("   Mean inter-item r:", round(mean_iic, 3), "\n")
+
+  # Tampilkan item bermasalah
+  rejected <- ia$Item[ia$keputusan == "Ditolak"]
+  revised <- ia$Item[ia$keputusan == "Direvisi"]
+  if (length(rejected) > 0) cat("   >> DITOLAK:", paste(rejected, collapse = ", "), "\n")
+  if (length(revised) > 0) cat("   >> PERLU REVISI:", paste(revised, collapse = ", "), "\n")
+  cat("\n")
+
+  # Simpan ringkasan
+  item_quality_summary <- rbind(item_quality_summary, data.frame(
+    Subtes = s, Nama = subtest_names[s],
+    Jumlah_Item = nrow(ia),
+    Diterima = sum(ia$keputusan == "Diterima"),
+    Direvisi = sum(ia$keputusan == "Direvisi"),
+    Ditolak = sum(ia$keputusan == "Ditolak"),
+    Mean_D_Index = round(mean(ia$D_index, na.rm = TRUE), 3),
+    Mean_r_pbis = round(mean(ia$r_pbis, na.rm = TRUE), 3),
+    Mean_r_it_corrected = round(mean(ia$r_item_total, na.rm = TRUE), 3),
+    Mean_Item_Rel_Index = round(mean(ia$item_rel_index, na.rm = TRUE), 3),
+    Mean_Inter_Item_r = round(mean_iic, 3),
+    stringsAsFactors = FALSE
+  ))
+}
+
+cat("--- Ringkasan Kualitas Item Seluruh Subtes ---\n")
+print(item_quality_summary[, c("Subtes","Jumlah_Item","Diterima","Direvisi","Ditolak",
+                                "Mean_D_Index","Mean_r_pbis","Mean_r_it_corrected")])
+
+total_items <- sum(item_quality_summary$Jumlah_Item)
+total_accepted <- sum(item_quality_summary$Diterima)
+total_revised <- sum(item_quality_summary$Direvisi)
+total_rejected <- sum(item_quality_summary$Ditolak)
+cat("\nTotal item:", total_items, "| Diterima:", total_accepted,
+    "(", round(total_accepted/total_items*100, 1), "%) | Direvisi:", total_revised,
+    "(", round(total_revised/total_items*100, 1), "%) | Ditolak:", total_rejected,
+    "(", round(total_rejected/total_items*100, 1), "%)\n\n")
 
 # ==============================================================================
 # 5. ANALISIS PSIKOMETRIKA MODERN (IRT) PER SUBTES
@@ -459,17 +582,15 @@ cat("   Membuat grafik IRT...\n")
 for (s in names(subtests)) {
   if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
     pdf(paste0("output_ist/grafik/04_ICC_", s, ".pdf"), width = 12, height = 8)
-    
+
     if (irt_results[[s]]$type == "dikotomis") {
-      # ICC dari model 2PL
-      plot(irt_results[[s]]$twopl, type = "trace",
-           main = paste("Item Characteristic Curves -", s, "(2PL)"),
-           par.settings = list(superpose.line = list(lwd = 2)))
+      print(plot(irt_results[[s]]$twopl, type = "trace",
+                 main = paste("Item Characteristic Curves -", s, "(2PL)"),
+                 par.settings = list(superpose.line = list(lwd = 2))))
     } else {
-      # ICC dari model GRM
-      plot(irt_results[[s]]$grm, type = "trace",
-           main = paste("Category Response Curves -", s, "(GRM)"),
-           par.settings = list(superpose.line = list(lwd = 2)))
+      print(plot(irt_results[[s]]$grm, type = "trace",
+                 main = paste("Category Response Curves -", s, "(GRM)"),
+                 par.settings = list(superpose.line = list(lwd = 2))))
     }
     dev.off()
   }
@@ -479,10 +600,10 @@ for (s in names(subtests)) {
 for (s in names(subtests)) {
   if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
     pdf(paste0("output_ist/grafik/05_IIF_", s, ".pdf"), width = 12, height = 8)
-    
+
     mod <- if (irt_results[[s]]$type == "dikotomis") irt_results[[s]]$twopl else irt_results[[s]]$grm
-    plot(mod, type = "infotrace",
-         main = paste("Item Information Functions -", s))
+    print(plot(mod, type = "infotrace",
+               main = paste("Item Information Functions -", s)))
     dev.off()
   }
 }
@@ -584,6 +705,70 @@ barplot(pct_scores, names.arg = names(subtests),
 abline(h = 50, col = "red", lty = 2)
 text(seq(0.7, by = 1.2, length.out = 9), pct_scores + 3,
      labels = paste0(round(pct_scores, 1), "%"), cex = 0.8)
+dev.off()
+
+# --- 7.12 Scatter plot: Tingkat Kesulitan vs Daya Beda per subtes ---
+pdf("output_ist/grafik/12_difficulty_vs_discrimination.pdf", width = 14, height = 10)
+par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+  col_pts <- ifelse(ia$keputusan == "Ditolak", "red",
+             ifelse(ia$keputusan == "Direvisi", "orange", "forestgreen"))
+  plot(ia$Mean, ia$D_index, pch = 19, col = col_pts, cex = 1.3,
+       main = paste(s, "- Kesulitan vs D-index"),
+       xlab = "Tingkat Kesulitan (Mean)", ylab = "Indeks Diskriminasi (D)",
+       xlim = c(0, max(ia$Mean, na.rm = TRUE) * 1.1),
+       ylim = c(min(0, min(ia$D_index, na.rm = TRUE) - 0.05), 1))
+  text(ia$Mean, ia$D_index, labels = ia$Item, cex = 0.55, pos = 3)
+  abline(h = c(0.20, 0.30), col = c("orange", "forestgreen"), lty = 2)
+  if (all(ia$Mean <= 1)) abline(v = c(0.20, 0.80), col = "gray60", lty = 3)
+}
+dev.off()
+
+# --- 7.13 Grafik perbandingan kelompok atas vs bawah per subtes ---
+pdf("output_ist/grafik/13_upper_lower_comparison.pdf", width = 14, height = 18)
+par(mfrow = c(5, 2), mar = c(5, 4, 3, 1))
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+  n_items <- nrow(ia)
+  x_pos <- barplot(rbind(ia$p_upper, ia$p_lower), beside = TRUE,
+                   names.arg = ia$Item,
+                   col = c("steelblue", "salmon"),
+                   main = paste(s, "- Kelompok Atas (27%) vs Bawah (27%)"),
+                   ylab = "Proporsi Benar / Mean",
+                   las = 2, cex.names = 0.7,
+                   ylim = c(0, max(c(ia$p_upper, ia$p_lower), na.rm = TRUE) * 1.2))
+  legend("topright", legend = c("Atas 27%", "Bawah 27%"),
+         fill = c("steelblue", "salmon"), cex = 0.7, bty = "n")
+}
+dev.off()
+
+# --- 7.14 Ringkasan kualitas item (keputusan) per subtes ---
+pdf("output_ist/grafik/14_item_quality_summary.pdf", width = 10, height = 6)
+par(mar = c(5, 4, 3, 1))
+quality_matrix <- t(as.matrix(item_quality_summary[, c("Diterima", "Direvisi", "Ditolak")]))
+colnames(quality_matrix) <- item_quality_summary$Subtes
+barplot(quality_matrix, beside = FALSE,
+        col = c("forestgreen", "orange", "red"),
+        main = "Ringkasan Keputusan Kualitas Item per Subtes",
+        ylab = "Jumlah Item", las = 1,
+        legend.text = c("Diterima", "Direvisi", "Ditolak"),
+        args.legend = list(x = "topright", bty = "n", cex = 0.9))
+dev.off()
+
+# --- 7.15 Scatter: r(pbis) vs r(it) corrected per subtes ---
+pdf("output_ist/grafik/15_rpbis_vs_rit.pdf", width = 14, height = 10)
+par(mfrow = c(3, 3), mar = c(4, 4, 3, 1))
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+  plot(ia$r_pbis, ia$r_item_total, pch = 19, col = "steelblue", cex = 1.2,
+       main = paste(s, "- r(pbis) vs r(it) terkoreksi"),
+       xlab = "Point-biserial (r_pbis)", ylab = "Corrected r(it)")
+  text(ia$r_pbis, ia$r_item_total, labels = ia$Item, cex = 0.55, pos = 3)
+  abline(0, 1, col = "gray50", lty = 2)
+  abline(h = 0.20, col = "red", lty = 3)
+  abline(v = 0.20, col = "red", lty = 3)
+}
 dev.off()
 
 cat("   Semua visualisasi selesai dibuat.\n")
@@ -738,31 +923,59 @@ ggplot(reliability_summary, aes(x = Subtes, y = Alpha, fill = Alpha >= 0.7)) +
 
 \\newpage
 
-## Analisis Item per Subtes
+## Analisis Butir Aitem per Subtes
 
 ```{r item_analysis_loop, results="asis"}
 for (s in names(subtests)) {
   cat("\\n### Subtes", s, "-", subtest_names[s], "\\n\\n")
-  
+
   ia <- ctt_results[[s]]$item_analysis
-  
-  display_cols <- c("Item","Mean","SD","r_item_total","r_drop","alpha_if_deleted","kategori_daya_beda")
+
+  # --- Tabel 1: Tingkat Kesulitan & Statistik Dasar ---
+  cat("#### Statistik Dasar Item\\n\\n")
+  basic_cols <- c("Item", "Mean", "SD")
   if ("p_difficulty" %in% names(ia)) {
-    display_cols <- c(display_cols[1:3], "p_difficulty", "kategori_difficulty", display_cols[4:7])
+    basic_cols <- c(basic_cols, "p_difficulty", "kategori_difficulty")
   }
-  
-  ia_display <- ia[, display_cols[display_cols %in% names(ia)]]
-  
-  print(kable(ia_display, caption = paste("Analisis Item CTT -", s),
+  ia_basic <- ia[, basic_cols[basic_cols %in% names(ia)]]
+  print(kable(ia_basic, caption = paste("Statistik Dasar Item -", s),
               booktabs = TRUE, digits = 3, row.names = FALSE) %>%
           kable_styling(latex_options = c("hold_position","scale_down"), font_size = 8))
-  
+
+  # --- Tabel 2: Daya Beda & Korelasi ---
+  cat("\\n#### Daya Beda & Korelasi Item\\n\\n")
+  disc_cols <- c("Item", "r_pbis", "r_item_total", "r_drop", "alpha_if_deleted", "kategori_daya_beda")
+  ia_disc <- ia[, disc_cols[disc_cols %in% names(ia)]]
+  names(ia_disc) <- c("Item", "r(pbis)", "r(it) corr", "r(drop)", "Alpha if Del", "Kategori")
+  print(kable(ia_disc, caption = paste("Daya Beda Item -", s),
+              booktabs = TRUE, digits = 3, row.names = FALSE) %>%
+          kable_styling(latex_options = c("hold_position","scale_down"), font_size = 8))
+
+  # --- Tabel 3: Analisis Kelompok Atas-Bawah (27%) ---
+  cat("\\n#### Analisis Kelompok Atas-Bawah (27%)\\n\\n")
+  ul_cols <- c("Item", "p_upper", "p_lower", "D_index", "kategori_D", "item_rel_index", "keputusan")
+  ia_ul <- ia[, ul_cols[ul_cols %in% names(ia)]]
+  names(ia_ul) <- c("Item", "P(Atas)", "P(Bawah)", "D-Index", "Kategori D", "Rel. Index", "Keputusan")
+  print(kable(ia_ul, caption = paste("Analisis Kelompok Atas-Bawah -", s),
+              booktabs = TRUE, digits = 3, row.names = FALSE) %>%
+          kable_styling(latex_options = c("hold_position","scale_down"), font_size = 8))
+
   cat("\\n**Alpha keseluruhan:", round(ctt_results[[s]]$alpha$total$raw_alpha, 3), "**\\n\\n")
-  
-  # Identifikasi item bermasalah
+
+  # --- Ringkasan item bermasalah ---
+  n_accepted <- sum(ia$keputusan == "Diterima")
+  n_revised  <- sum(ia$keputusan == "Direvisi")
+  n_rejected <- sum(ia$keputusan == "Ditolak")
+  cat("**Keputusan kualitas item:**", n_accepted, "diterima,",
+      n_revised, "perlu revisi,", n_rejected, "ditolak.\\n\\n")
+
   problem_items <- ia$Item[ia$r_item_total < 0.20]
   if (length(problem_items) > 0) {
     cat("*Item dengan daya beda rendah (r < 0.20):*", paste(problem_items, collapse = ", "), "\\n\\n")
+  }
+  rejected_items <- ia$Item[ia$keputusan == "Ditolak"]
+  if (length(rejected_items) > 0) {
+    cat("*Item ditolak (r\\\\_it < 0.10 atau D < 0.10):*", paste(rejected_items, collapse = ", "), "\\n\\n")
   }
   if ("reversed" %in% names(ia)) {
     rev_items <- ia$Item[ia$reversed == TRUE]
@@ -770,9 +983,73 @@ for (s in names(subtests)) {
       cat("*Item berkorelasi negatif (di-reverse):*", paste(rev_items, collapse = ", "), "\\n\\n")
     }
   }
-  
+
+  # Inter-item correlation summary
+  if (!is.null(ctt_results[[s]]$inter_item_cor)) {
+    iic <- ctt_results[[s]]$inter_item_cor
+    diag(iic) <- NA
+    cat("**Korelasi inter-item:** Mean =", round(mean(iic, na.rm = TRUE), 3),
+        ", Min =", round(min(iic, na.rm = TRUE), 3),
+        ", Max =", round(max(iic, na.rm = TRUE), 3), "\\n\\n")
+  }
+
   cat("\\n\\newpage\\n")
 }
+```
+
+## Ringkasan Kualitas Item Seluruh Subtes
+
+```{r ringkasan_kualitas_item}
+quality_tbl <- item_quality_summary[, c("Subtes","Jumlah_Item","Diterima","Direvisi","Ditolak",
+                                         "Mean_D_Index","Mean_r_pbis","Mean_r_it_corrected",
+                                         "Mean_Item_Rel_Index","Mean_Inter_Item_r")]
+names(quality_tbl) <- c("Subtes","n Item","Diterima","Revisi","Ditolak",
+                          "Mean D","Mean r(pbis)","Mean r(it)","Mean Rel Idx","Mean IIC")
+kable(quality_tbl, caption = "Ringkasan Kualitas Item per Subtes",
+      booktabs = TRUE, digits = 3, row.names = FALSE) %>%
+  kable_styling(latex_options = c("hold_position","scale_down"), font_size = 9)
+
+total_items <- sum(item_quality_summary$Jumlah_Item)
+total_accepted <- sum(item_quality_summary$Diterima)
+total_revised <- sum(item_quality_summary$Direvisi)
+total_rejected <- sum(item_quality_summary$Ditolak)
+cat("\\n**Total:**", total_items, "item |",
+    total_accepted, "diterima (", round(total_accepted/total_items*100, 1), "%) |",
+    total_revised, "revisi (", round(total_revised/total_items*100, 1), "%) |",
+    total_rejected, "ditolak (", round(total_rejected/total_items*100, 1), "%)\\n")
+```
+
+```{r plot_item_quality, fig.cap="Ringkasan Keputusan Kualitas Item per Subtes", fig.height=4, fig.width=8}
+quality_long <- reshape2::melt(item_quality_summary[, c("Subtes","Diterima","Direvisi","Ditolak")],
+                                id.vars = "Subtes", variable.name = "Keputusan", value.name = "Jumlah")
+quality_long$Keputusan <- factor(quality_long$Keputusan, levels = c("Ditolak","Direvisi","Diterima"))
+
+ggplot(quality_long, aes(x = Subtes, y = Jumlah, fill = Keputusan)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("Diterima" = "forestgreen", "Direvisi" = "orange", "Ditolak" = "red")) +
+  labs(title = "Keputusan Kualitas Item per Subtes IST",
+       x = "Subtes", y = "Jumlah Item") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r plot_diff_disc_scatter, results="asis", fig.height=5, fig.width=10}
+cat("\\n### Scatter Plot: Tingkat Kesulitan vs Indeks Diskriminasi\\n\\n")
+all_ia <- do.call(rbind, lapply(names(subtests), function(s) {
+  ia <- ctt_results[[s]]$item_analysis
+  ia$Subtes <- s
+  ia
+}))
+
+ggplot(all_ia, aes(x = Mean, y = D_index, color = keputusan)) +
+  geom_point(size = 2, alpha = 0.7) +
+  geom_hline(yintercept = c(0.20, 0.30), linetype = "dashed", color = c("orange","forestgreen")) +
+  scale_color_manual(values = c("Diterima" = "forestgreen", "Direvisi" = "orange", "Ditolak" = "red")) +
+  facet_wrap(~ Subtes, scales = "free_x", ncol = 3) +
+  labs(title = "Tingkat Kesulitan vs Indeks Diskriminasi (D) per Subtes",
+       x = "Tingkat Kesulitan (Mean)", y = "Indeks D", color = "Keputusan") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
 ```
 
 ## Distribusi Skor per Subtes
@@ -1138,20 +1415,32 @@ kable(rel_summary, caption = "Ringkasan Reliabilitas dan Interpretasi",
 ```{r item_bermasalah}
 problem_df <- data.frame(Subtes = character(), Item = character(),
                          Masalah = character(), Nilai = numeric(),
+                         Keputusan = character(),
                          stringsAsFactors = FALSE)
 
 for (s in names(subtests)) {
   ia <- ctt_results[[s]]$item_analysis
-  
-  # Daya beda rendah
+
+  # Daya beda rendah (r_it corrected)
   low_disc <- ia[ia$r_item_total < 0.20, ]
   if (nrow(low_disc) > 0) {
     problem_df <- rbind(problem_df, data.frame(
       Subtes = s, Item = low_disc$Item,
-      Masalah = "Daya beda < 0.20",
-      Nilai = low_disc$r_item_total, stringsAsFactors = FALSE))
+      Masalah = "r(it) corrected < 0.20",
+      Nilai = low_disc$r_item_total,
+      Keputusan = low_disc$keputusan, stringsAsFactors = FALSE))
   }
-  
+
+  # D-index rendah
+  low_D <- ia[ia$D_index < 0.20, ]
+  if (nrow(low_D) > 0) {
+    problem_df <- rbind(problem_df, data.frame(
+      Subtes = s, Item = low_D$Item,
+      Masalah = "D-index < 0.20",
+      Nilai = low_D$D_index,
+      Keputusan = low_D$keputusan, stringsAsFactors = FALSE))
+  }
+
   # Item berkorelasi negatif (di-reverse)
   if ("reversed" %in% names(ia)) {
     rev_items <- ia[ia$reversed == TRUE, ]
@@ -1159,7 +1448,8 @@ for (s in names(subtests)) {
       problem_df <- rbind(problem_df, data.frame(
         Subtes = s, Item = rev_items$Item,
         Masalah = "Korelasi negatif (reversed)",
-        Nilai = rev_items$r_item_total, stringsAsFactors = FALSE))
+        Nilai = rev_items$r_item_total,
+        Keputusan = rev_items$keputusan, stringsAsFactors = FALSE))
     }
   }
 
@@ -1167,27 +1457,30 @@ for (s in names(subtests)) {
   if ("p_difficulty" %in% names(ia)) {
     too_easy <- ia[ia$p_difficulty > 0.95, ]
     too_hard <- ia[ia$p_difficulty < 0.05, ]
-    
+
     if (nrow(too_easy) > 0) {
       problem_df <- rbind(problem_df, data.frame(
         Subtes = s, Item = too_easy$Item,
         Masalah = "Terlalu mudah (p > 0.95)",
-        Nilai = too_easy$p_difficulty, stringsAsFactors = FALSE))
+        Nilai = too_easy$p_difficulty,
+        Keputusan = too_easy$keputusan, stringsAsFactors = FALSE))
     }
     if (nrow(too_hard) > 0) {
       problem_df <- rbind(problem_df, data.frame(
         Subtes = s, Item = too_hard$Item,
         Masalah = "Terlalu sulit (p < 0.05)",
-        Nilai = too_hard$p_difficulty, stringsAsFactors = FALSE))
+        Nilai = too_hard$p_difficulty,
+        Keputusan = too_hard$keputusan, stringsAsFactors = FALSE))
     }
   }
 }
 
+# Hapus duplikat (item bisa muncul di beberapa kategori masalah)
 if (nrow(problem_df) > 0) {
   problem_df$Nilai <- round(problem_df$Nilai, 3)
-  kable(problem_df, caption = "Daftar Item Bermasalah",
+  kable(problem_df, caption = "Daftar Item Bermasalah (Semua Kriteria)",
         booktabs = TRUE, row.names = FALSE) %>%
-    kable_styling(latex_options = c("hold_position"), full_width = FALSE)
+    kable_styling(latex_options = c("hold_position","scale_down"), font_size = 9)
 } else {
   cat("Tidak ditemukan item bermasalah berdasarkan kriteria yang ditetapkan.\\n")
 }
@@ -1195,13 +1488,15 @@ if (nrow(problem_df) > 0) {
 
 ## Rekomendasi
 
-Berdasarkan hasil analisis psikometrik di atas, berikut beberapa rekomendasi:
+Berdasarkan hasil analisis butir aitem di atas, berikut beberapa rekomendasi:
 
-1. **Item dengan daya beda rendah** (r < 0.20) perlu ditinjau ulang, baik dari segi konten maupun kunci jawaban.
-2. **Item yang terlalu mudah atau terlalu sulit** (p < 0.05 atau p > 0.95) perlu direvisi agar distribusi tingkat kesulitan lebih merata.
-3. **Item yang menunjukkan misfit** pada analisis IRT perlu dievaluasi apakah mengukur konstruk yang sama.
-4. **Reliabilitas** subtes dengan Alpha < 0.70 perlu ditingkatkan, misalnya dengan menambahkan item berkualitas atau merevisi item yang ada.
-5. **Struktur faktor** IST sebaiknya dikonfirmasi dengan sampel yang lebih besar untuk memastikan model 3-faktor (Verbal, Numerik, Figural) sesuai.
+1. **Item ditolak** (r\\_it < 0.10 atau D-index < 0.10) sebaiknya dihapus atau ditulis ulang sepenuhnya karena tidak mampu membedakan kelompok kemampuan tinggi dan rendah.
+2. **Item perlu revisi** (r\\_it 0.10-0.20 atau D-index 0.10-0.20) perlu ditinjau ulang dari segi konten, kunci jawaban, dan kualitas distraktor.
+3. **Item dengan daya beda rendah** (r < 0.20) perlu ditinjau ulang, baik dari segi konten maupun kunci jawaban.
+4. **Item yang terlalu mudah atau terlalu sulit** (p < 0.05 atau p > 0.95) perlu direvisi agar distribusi tingkat kesulitan lebih merata.
+5. **Item yang menunjukkan misfit** pada analisis IRT perlu dievaluasi apakah mengukur konstruk yang sama.
+6. **Reliabilitas** subtes dengan Alpha < 0.70 perlu ditingkatkan, misalnya dengan menambahkan item berkualitas atau merevisi item yang ada.
+7. **Struktur faktor** IST sebaiknya dikonfirmasi dengan sampel yang lebih besar untuk memastikan model 3-faktor (Verbal, Numerik, Figural) sesuai.
 
 ---
 
@@ -1228,6 +1523,413 @@ tryCatch({
   cat("   Kemudian re-run bagian render.\n")
   cat("   Error:", conditionMessage(e), "\n")
 })
+
+# ==============================================================================
+# 8b. LAPORAN KESELURUHAN ANALISIS (PLAIN TEXT)
+# ==============================================================================
+
+cat("\n>>> [6b] Membuat laporan keseluruhan analisis...\n")
+
+laporan_lines <- c()
+ln <- function(...) laporan_lines <<- c(laporan_lines, paste0(...))
+ln_sep <- function() ln(paste(rep("=", 80), collapse = ""))
+ln_sub <- function() ln(paste(rep("-", 60), collapse = ""))
+
+ln_sep()
+ln("  LAPORAN KESELURUHAN ANALISIS PSIKOMETRIK")
+ln("  INTELLIGENZ STRUKTUR TEST (IST)")
+ln_sep()
+ln("  Tanggal analisis: ", format(Sys.Date(), "%d %B %Y"))
+ln("  Jumlah responden: ", nrow(data_raw))
+ln("  Jumlah item total: ", length(unlist(subtests)))
+ln("  Jumlah subtes    : ", length(subtests))
+ln_sep()
+ln("")
+
+# --- A. Deskripsi Sampel ---
+ln("A. DESKRIPSI SAMPEL")
+ln_sub()
+ln("")
+ln("  A.1 Jenis Kelamin:")
+tbl_jk <- table(data_raw$jk)
+for (nm in names(tbl_jk)) {
+  ln("      ", nm, ": ", tbl_jk[nm], " (", round(tbl_jk[nm]/sum(tbl_jk)*100, 1), "%)")
+}
+ln("")
+ln("  A.2 Kelompok Usia:")
+tbl_usia <- table(data_raw$rentus)
+for (nm in names(tbl_usia)) {
+  ln("      ", nm, ": ", tbl_usia[nm], " (", round(tbl_usia[nm]/sum(tbl_usia)*100, 1), "%)")
+}
+ln("")
+ln("  A.3 Pendidikan:")
+tbl_pend <- table(data_raw$pendidikan)
+for (nm in names(tbl_pend)) {
+  ln("      ", nm, ": ", tbl_pend[nm], " (", round(tbl_pend[nm]/sum(tbl_pend)*100, 1), "%)")
+}
+ln("")
+
+# --- B. Statistik Deskriptif Skor ---
+ln("B. STATISTIK DESKRIPTIF SKOR PER SUBTES")
+ln_sub()
+ln("")
+ln(sprintf("  %-6s %-40s %5s %6s %6s %6s %6s %8s %8s",
+           "Subtes", "Nama", "n", "Min", "Max", "Mean", "SD", "Skewness", "Kurtosis"))
+ln(paste(rep("-", 100), collapse = ""))
+for (s in names(subtests)) {
+  skor <- data_raw[[paste0("skor_", s)]]
+  desc <- psych::describe(skor)
+  ln(sprintf("  %-6s %-40s %5d %6.1f %6.1f %6.2f %6.2f %8.3f %8.3f",
+             s, subtest_names[s], length(skor),
+             min(skor, na.rm = TRUE), max(skor, na.rm = TRUE),
+             mean(skor, na.rm = TRUE), sd(skor, na.rm = TRUE),
+             desc$skew, desc$kurtosis))
+}
+skor_total <- data_raw$skor_total
+desc_total <- psych::describe(skor_total)
+ln(paste(rep("-", 100), collapse = ""))
+ln(sprintf("  %-6s %-40s %5d %6.1f %6.1f %6.2f %6.2f %8.3f %8.3f",
+           "TOTAL", "Skor Total IST", length(skor_total),
+           min(skor_total, na.rm = TRUE), max(skor_total, na.rm = TRUE),
+           mean(skor_total, na.rm = TRUE), sd(skor_total, na.rm = TRUE),
+           desc_total$skew, desc_total$kurtosis))
+ln("")
+
+# --- C. Reliabilitas ---
+ln("C. RELIABILITAS (CRONBACH'S ALPHA)")
+ln_sub()
+ln("")
+ln(sprintf("  %-6s %5s %7s %9s %8s %8s %6s  %-15s",
+           "Subtes", "n", "Alpha", "Alpha Std", "Mean rit", "SEM", "SH", "Interpretasi"))
+ln(paste(rep("-", 85), collapse = ""))
+for (i in 1:nrow(reliability_summary)) {
+  r <- reliability_summary[i, ]
+  interp <- ifelse(r$Alpha >= 0.9, "Sangat Baik",
+            ifelse(r$Alpha >= 0.8, "Baik",
+            ifelse(r$Alpha >= 0.7, "Memadai",
+            ifelse(r$Alpha >= 0.6, "Cukup",
+            ifelse(r$Alpha >= 0.5, "Kurang", "Rendah")))))
+  sh_val <- tryCatch(round(ctt_results[[r$Subtes]]$split_half$maxrb, 3), error = function(e) NA)
+  ln(sprintf("  %-6s %5d %7.3f %9.3f %8.3f %8.2f %6s  %-15s",
+             r$Subtes, r$Jumlah_Item, r$Alpha, r$Alpha_Std, r$Mean_r_IT, r$SEM,
+             ifelse(is.na(sh_val), "N/A", as.character(sh_val)), interp))
+}
+ln("")
+
+# --- D. Analisis Butir Aitem Komprehensif ---
+ln("D. ANALISIS BUTIR AITEM PER SUBTES")
+ln_sub()
+ln("")
+
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+
+  ln("  D.", match(s, names(subtests)), " Subtes ", s, " - ", subtest_names[s])
+  ln("  Alpha: ", round(ctt_results[[s]]$alpha$total$raw_alpha, 3),
+     " | Jumlah item: ", nrow(ia))
+  ln("")
+
+  # Header tabel
+  has_p <- "p_difficulty" %in% names(ia)
+  if (has_p) {
+    ln(sprintf("  %-7s %6s %6s %7s %7s %7s %7s %7s %7s %7s %-12s %-10s",
+               "Item", "Mean", "SD", "r(pbis)", "r(it)", "p_up", "p_low", "D-idx",
+               "RelIdx", "AlpDel", "Kat.Diff", "Keputusan"))
+  } else {
+    ln(sprintf("  %-7s %6s %6s %7s %7s %7s %7s %7s %7s %7s %-10s",
+               "Item", "Mean", "SD", "r(pbis)", "r(it)", "p_up", "p_low", "D-idx",
+               "RelIdx", "AlpDel", "Keputusan"))
+  }
+  ln(paste("  ", paste(rep("-", 110), collapse = ""), sep = ""))
+
+  for (j in 1:nrow(ia)) {
+    row <- ia[j, ]
+    rev_mark <- ifelse(row$reversed, " *", "")
+    if (has_p) {
+      diff_cat <- substr(row$kategori_difficulty, 1, 12)
+      ln(sprintf("  %-7s %6.3f %6.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %-12s %-10s%s",
+                 row$Item, row$Mean, row$SD, row$r_pbis, row$r_item_total,
+                 row$p_upper, row$p_lower, row$D_index,
+                 row$item_rel_index, row$alpha_if_deleted,
+                 diff_cat, row$keputusan, rev_mark))
+    } else {
+      ln(sprintf("  %-7s %6.3f %6.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %-10s%s",
+                 row$Item, row$Mean, row$SD, row$r_pbis, row$r_item_total,
+                 row$p_upper, row$p_lower, row$D_index,
+                 row$item_rel_index, row$alpha_if_deleted,
+                 row$keputusan, rev_mark))
+    }
+  }
+
+  # Ringkasan per subtes
+  ln("")
+  ln("  Ringkasan: Diterima=", sum(ia$keputusan == "Diterima"),
+     " | Direvisi=", sum(ia$keputusan == "Direvisi"),
+     " | Ditolak=", sum(ia$keputusan == "Ditolak"))
+  ln("  Mean D-index=", round(mean(ia$D_index, na.rm = TRUE), 3),
+     " | Mean r(pbis)=", round(mean(ia$r_pbis, na.rm = TRUE), 3),
+     " | Mean r(it)=", round(mean(ia$r_item_total, na.rm = TRUE), 3))
+
+  # Inter-item
+  if (!is.null(ctt_results[[s]]$inter_item_cor)) {
+    iic <- ctt_results[[s]]$inter_item_cor
+    diag(iic) <- NA
+    ln("  Mean inter-item r=", round(mean(iic, na.rm = TRUE), 3),
+       " | Min=", round(min(iic, na.rm = TRUE), 3),
+       " | Max=", round(max(iic, na.rm = TRUE), 3))
+  }
+
+  rev_items <- ia$Item[ia$reversed == TRUE]
+  if (length(rev_items) > 0) {
+    ln("  * Item reversed: ", paste(rev_items, collapse = ", "))
+  }
+  ln("")
+}
+
+# --- E. Ringkasan Kualitas Item Keseluruhan ---
+ln("E. RINGKASAN KUALITAS ITEM SELURUH SUBTES")
+ln_sub()
+ln("")
+ln(sprintf("  %-6s %5s %8s %8s %7s %8s %9s %8s %8s",
+           "Subtes", "n", "Diterima", "Direvisi", "Ditolak", "Mean D", "Mean rpbis", "Mean rit", "Mean IIC"))
+ln(paste(rep("-", 85), collapse = ""))
+for (i in 1:nrow(item_quality_summary)) {
+  q <- item_quality_summary[i, ]
+  ln(sprintf("  %-6s %5d %8d %8d %7d %8.3f %9.3f %8.3f %8.3f",
+             q$Subtes, q$Jumlah_Item, q$Diterima, q$Direvisi, q$Ditolak,
+             q$Mean_D_Index, q$Mean_r_pbis, q$Mean_r_it_corrected, q$Mean_Inter_Item_r))
+}
+ln(paste(rep("-", 85), collapse = ""))
+ln(sprintf("  %-6s %5d %8d %8d %7d",
+           "TOTAL", total_items, total_accepted, total_revised, total_rejected))
+ln(sprintf("  Persentase: Diterima %.1f%% | Direvisi %.1f%% | Ditolak %.1f%%",
+           total_accepted/total_items*100, total_revised/total_items*100, total_rejected/total_items*100))
+ln("")
+
+# --- F. IRT ---
+ln("F. ANALISIS ITEM RESPONSE THEORY (IRT)")
+ln_sub()
+ln("")
+
+for (s in names(subtests)) {
+  if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
+    ln("  F.", match(s, names(subtests)), " Subtes ", s, " - ", subtest_names[s])
+
+    if (irt_results[[s]]$type == "dikotomis") {
+      params <- as.data.frame(irt_results[[s]]$twopl_params)
+      ln(sprintf("  %-7s %10s %10s", "Item", "a (Disc)", "b (Diff)"))
+      ln(paste("  ", paste(rep("-", 30), collapse = "")))
+      for (j in 1:nrow(params)) {
+        ln(sprintf("  %-7s %10.3f %10.3f", rownames(params)[j], params$a[j], params$b[j]))
+      }
+
+      # Model comparison
+      if (!is.null(irt_results[[s]]$anova)) {
+        av <- irt_results[[s]]$anova
+        ln("")
+        ln("  Perbandingan: AIC Rasch=", round(av$AIC[1], 1),
+           " | AIC 2PL=", round(av$AIC[2], 1))
+        ln("                BIC Rasch=", round(av$BIC[1], 1),
+           " | BIC 2PL=", round(av$BIC[2], 1))
+        if (!is.na(av$p[2])) {
+          ln("  LRT p-value: ", round(av$p[2], 4),
+             ifelse(av$p[2] < 0.05, " => 2PL lebih baik", " => Rasch cukup memadai"))
+        }
+      }
+
+      # Model fit M2
+      if (!is.null(irt_results[[s]]$twopl_m2)) {
+        m2 <- irt_results[[s]]$twopl_m2
+        ln("  Model Fit 2PL: RMSEA=", round(m2$RMSEA, 4),
+           " | SRMSR=", round(m2$SRMSR, 4),
+           " | TLI=", round(m2$TLI, 4),
+           " | CFI=", round(m2$CFI, 4))
+      }
+
+      # Item fit misfit
+      fit_df <- irt_results[[s]]$twopl_fit
+      misfit <- fit_df[fit_df$p.S_X2 < 0.05, ]
+      if (nrow(misfit) > 0) {
+        ln("  Item MISFIT (p < 0.05): ", paste(misfit$item, collapse = ", "))
+      } else {
+        ln("  Semua item FIT (p >= 0.05)")
+      }
+
+    } else {
+      params <- as.data.frame(irt_results[[s]]$grm_params)
+      param_names <- colnames(params)
+      header <- sprintf("  %-7s", "Item")
+      for (pn in param_names) header <- paste0(header, sprintf(" %8s", pn))
+      ln(header)
+      ln(paste("  ", paste(rep("-", 8 + 9 * length(param_names)), collapse = "")))
+      for (j in 1:nrow(params)) {
+        row_str <- sprintf("  %-7s", rownames(params)[j])
+        for (pn in param_names) row_str <- paste0(row_str, sprintf(" %8.3f", params[j, pn]))
+        ln(row_str)
+      }
+
+      fit_df <- irt_results[[s]]$grm_fit
+      misfit <- fit_df[fit_df$p.S_X2 < 0.05, ]
+      if (nrow(misfit) > 0) {
+        ln("  Item MISFIT (p < 0.05): ", paste(misfit$item, collapse = ", "))
+      } else {
+        ln("  Semua item FIT (p >= 0.05)")
+      }
+    }
+    ln("")
+  } else if (!is.null(irt_results[[s]]) && !is.null(irt_results[[s]]$error)) {
+    ln("  F.", match(s, names(subtests)), " Subtes ", s, " - GAGAL: ", irt_results[[s]]$error)
+    ln("")
+  }
+}
+
+# --- G. Analisis Struktur Faktor ---
+ln("G. ANALISIS STRUKTUR FAKTOR")
+ln_sub()
+ln("")
+
+# Korelasi
+ln("  G.1 Korelasi Antar Subtes")
+ln("")
+header_cor <- sprintf("  %-6s", "")
+for (s in names(subtests)) header_cor <- paste0(header_cor, sprintf(" %6s", s))
+ln(header_cor)
+for (s1 in names(subtests)) {
+  row_str <- sprintf("  %-6s", s1)
+  for (s2 in names(subtests)) row_str <- paste0(row_str, sprintf(" %6.3f", cor_matrix[s1, s2]))
+  ln(row_str)
+}
+ln("")
+
+# KMO
+ln("  G.2 KMO = ", round(kmo_res$MSA, 3))
+ln("")
+
+# EFA
+ln("  G.3 EFA (3 Faktor, Varimax)")
+loadings_mat <- unclass(efa_result$loadings)
+header_efa <- sprintf("  %-6s", "")
+for (cn in colnames(loadings_mat)) header_efa <- paste0(header_efa, sprintf(" %8s", cn))
+header_efa <- paste0(header_efa, sprintf(" %10s", "Communal."))
+ln(header_efa)
+for (rn in rownames(loadings_mat)) {
+  row_str <- sprintf("  %-6s", rn)
+  for (cn in colnames(loadings_mat)) row_str <- paste0(row_str, sprintf(" %8.3f", loadings_mat[rn, cn]))
+  row_str <- paste0(row_str, sprintf(" %10.3f", efa_result$communality[rn]))
+  ln(row_str)
+}
+ln("")
+
+# CFA
+if (!is.null(cfa_fit)) {
+  ln("  G.4 CFA Model 3-Faktor (Verbal: SE+WA+AN+GE | Numerik: RA+ZR+ME | Figural: FA+WU)")
+  fit_idx <- fitMeasures(cfa_fit, c("chisq","df","pvalue","cfi","tli","rmsea","srmr"))
+  ln(sprintf("  Chi-sq=%.2f (df=%d, p=%.4f) | CFI=%.4f | TLI=%.4f | RMSEA=%.4f | SRMR=%.4f",
+             fit_idx["chisq"], fit_idx["df"], fit_idx["pvalue"],
+             fit_idx["cfi"], fit_idx["tli"], fit_idx["rmsea"], fit_idx["srmr"]))
+
+  std_loads <- lavaan::standardizedSolution(cfa_fit)
+  loadings_cfa <- std_loads[std_loads$op == "=~", ]
+  ln("")
+  ln(sprintf("  %-10s %-6s %8s %8s %10s", "Faktor", "Subtes", "Loading", "SE", "p-value"))
+  ln(paste("  ", paste(rep("-", 45), collapse = "")))
+  for (j in 1:nrow(loadings_cfa)) {
+    lc <- loadings_cfa[j, ]
+    ln(sprintf("  %-10s %-6s %8.3f %8.3f %10.4f", lc$lhs, lc$rhs, lc$est.std, lc$se, lc$pvalue))
+  }
+} else {
+  ln("  G.4 CFA tidak dapat diestimasi.")
+}
+ln("")
+
+# --- H. Item Bermasalah ---
+ln("H. DAFTAR ITEM BERMASALAH")
+ln_sub()
+ln("")
+
+all_problems <- data.frame(Subtes = character(), Item = character(),
+                           Masalah = character(), stringsAsFactors = FALSE)
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+  rejected <- ia[ia$keputusan == "Ditolak", ]
+  if (nrow(rejected) > 0) {
+    all_problems <- rbind(all_problems, data.frame(
+      Subtes = s, Item = rejected$Item,
+      Masalah = paste0("DITOLAK (r_it=", rejected$r_item_total, ", D=", rejected$D_index, ")"),
+      stringsAsFactors = FALSE))
+  }
+  revised <- ia[ia$keputusan == "Direvisi", ]
+  if (nrow(revised) > 0) {
+    all_problems <- rbind(all_problems, data.frame(
+      Subtes = s, Item = revised$Item,
+      Masalah = paste0("REVISI (r_it=", revised$r_item_total, ", D=", revised$D_index, ")"),
+      stringsAsFactors = FALSE))
+  }
+  if ("p_difficulty" %in% names(ia)) {
+    extreme <- ia[ia$p_difficulty > 0.95 | ia$p_difficulty < 0.05, ]
+    if (nrow(extreme) > 0) {
+      all_problems <- rbind(all_problems, data.frame(
+        Subtes = s, Item = extreme$Item,
+        Masalah = paste0("Ekstrem (p=", extreme$p_difficulty, ")"),
+        stringsAsFactors = FALSE))
+    }
+  }
+  if ("reversed" %in% names(ia)) {
+    rev_i <- ia[ia$reversed == TRUE, ]
+    if (nrow(rev_i) > 0) {
+      all_problems <- rbind(all_problems, data.frame(
+        Subtes = s, Item = rev_i$Item,
+        Masalah = "Korelasi negatif (reversed)",
+        stringsAsFactors = FALSE))
+    }
+  }
+  # IRT misfit
+  if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
+    fit_df <- if (irt_results[[s]]$type == "dikotomis") irt_results[[s]]$twopl_fit else irt_results[[s]]$grm_fit
+    misfit_items <- fit_df[fit_df$p.S_X2 < 0.05, ]
+    if (nrow(misfit_items) > 0) {
+      all_problems <- rbind(all_problems, data.frame(
+        Subtes = s, Item = misfit_items$item,
+        Masalah = paste0("IRT Misfit (p=", round(misfit_items$p.S_X2, 4), ")"),
+        stringsAsFactors = FALSE))
+    }
+  }
+}
+
+if (nrow(all_problems) > 0) {
+  # Deduplicate
+  all_problems <- all_problems[!duplicated(paste(all_problems$Subtes, all_problems$Item, all_problems$Masalah)), ]
+  ln(sprintf("  %-6s %-7s %s", "Subtes", "Item", "Masalah"))
+  ln(paste("  ", paste(rep("-", 70), collapse = "")))
+  for (j in 1:nrow(all_problems)) {
+    ln(sprintf("  %-6s %-7s %s", all_problems$Subtes[j], all_problems$Item[j], all_problems$Masalah[j]))
+  }
+  ln("")
+  ln("  Total item bermasalah (unik): ", length(unique(paste(all_problems$Subtes, all_problems$Item))))
+} else {
+  ln("  Tidak ditemukan item bermasalah.")
+}
+ln("")
+
+# --- I. Rekomendasi ---
+ln("I. REKOMENDASI")
+ln_sub()
+ln("")
+ln("  1. Item DITOLAK (r_it < 0.10 atau D < 0.10): hapus atau tulis ulang.")
+ln("  2. Item DIREVISI (r_it 0.10-0.20 atau D 0.10-0.20): tinjau konten & distraktor.")
+ln("  3. Item terlalu mudah/sulit (p > 0.95 atau p < 0.05): revisi tingkat kesulitan.")
+ln("  4. Item IRT misfit: evaluasi kesesuaian dengan konstruk yang diukur.")
+ln("  5. Subtes Alpha < 0.70: tambah item berkualitas atau revisi item lemah.")
+ln("  6. Konfirmasi struktur 3-faktor dengan sampel lebih besar.")
+ln("")
+ln_sep()
+ln("  Laporan ini dihasilkan secara otomatis menggunakan R.")
+ln("  ", format(Sys.Date(), "%d %B %Y"))
+ln_sep()
+
+# Tulis file
+writeLines(laporan_lines, "output_ist/Laporan_Keseluruhan_Analisis_IST.txt")
+cat(">>> LAPORAN KESELURUHAN BERHASIL DIBUAT: output_ist/Laporan_Keseluruhan_Analisis_IST.txt\n")
 
 # ==============================================================================
 # 9. SIMPAN HASIL ANALISIS KE FILE
@@ -1262,6 +1964,17 @@ for (s in names(subtests)) {
 # Simpan korelasi
 write.csv(round(cor_matrix, 3), "output_ist/korelasi_subtes.csv")
 
+# Simpan ringkasan kualitas item
+write.csv(item_quality_summary, "output_ist/item_quality_summary.csv", row.names = FALSE)
+
+# Simpan inter-item correlation per subtes
+for (s in names(subtests)) {
+  if (!is.null(ctt_results[[s]]$inter_item_cor)) {
+    write.csv(round(ctt_results[[s]]$inter_item_cor, 3),
+              paste0("output_ist/inter_item_cor_", s, ".csv"))
+  }
+}
+
 cat("\n")
 cat("============================================================\n")
 cat("  ANALISIS SELESAI!                                        \n")
@@ -1269,10 +1982,13 @@ cat("============================================================\n")
 cat("  File output tersedia di folder: output_ist/              \n")
 cat("                                                            \n")
 cat("  Isi folder:                                               \n")
-cat("  - Laporan_Psikometrik_IST.pdf    (Laporan lengkap)       \n")
+cat("  - Laporan_Psikometrik_IST.pdf    (Laporan PDF lengkap)    \n")
+cat("  - Laporan_Keseluruhan_Analisis_IST.txt (Laporan ringkasan)\n")
 cat("  - laporan_psikometrik_IST.Rmd    (File source Rmd)       \n")
 cat("  - reliabilitas_summary.csv                                \n")
+cat("  - item_quality_summary.csv       (ringkasan kualitas)    \n")
 cat("  - item_analysis_[SUBTES].csv     (per subtes)            \n")
+cat("  - inter_item_cor_[SUBTES].csv    (korelasi inter-item)   \n")
 cat("  - irt_params_[MODEL]_[SUBTES].csv                        \n")
 cat("  - korelasi_subtes.csv                                     \n")
 cat("  - grafik/                         (Semua grafik PDF)      \n")
