@@ -183,7 +183,15 @@ klasifikasi_wechsler <- function(iq) {
 
 # Fungsi untuk menghasilkan tabel item analysis CTT
 item_analysis_ctt <- function(data_items, subtes_name) {
-  ia <- psych::alpha(data_items, check.keys = FALSE)
+  ia <- suppressWarnings(psych::alpha(data_items, check.keys = TRUE))
+
+  # Identifikasi item yang di-reverse oleh check.keys
+  reversed_items <- names(which(ia$keys == -1))
+  if (length(reversed_items) > 0) {
+    cat("   [CATATAN] Item berkorelasi negatif (di-reverse untuk analisis):",
+        paste(reversed_items, collapse = ", "), "\n")
+  }
+
   item_stats <- data.frame(
     Item = colnames(data_items),
     Mean = round(colMeans(data_items, na.rm = TRUE), 3),
@@ -191,6 +199,7 @@ item_analysis_ctt <- function(data_items, subtes_name) {
     r_item_total = round(ia$item.stats$r.cor, 3),
     r_drop = round(ia$item.stats$r.drop, 3),
     alpha_if_deleted = round(ia$alpha.drop$raw_alpha, 3),
+    reversed = colnames(data_items) %in% reversed_items,
     stringsAsFactors = FALSE
   )
   # Untuk dikotomis, Mean = proporsi benar = tingkat kesulitan
@@ -230,13 +239,13 @@ for (s in names(subtests)) {
   items <- data_raw[, subtests[[s]]]
   
   # Reliabilitas (Cronbach's Alpha)
-  alpha_res <- psych::alpha(items, check.keys = FALSE)
-  
+  alpha_res <- suppressWarnings(psych::alpha(items, check.keys = TRUE))
+
   # Analisis item
   ia <- item_analysis_ctt(items, s)
-  
+
   # Split-half reliability
-  sh <- psych::splitHalf(items, raw = TRUE)
+  sh <- suppressWarnings(psych::splitHalf(items, raw = TRUE))
   
   ctt_results[[s]] <- list(
     alpha = alpha_res,
@@ -755,6 +764,12 @@ for (s in names(subtests)) {
   if (length(problem_items) > 0) {
     cat("*Item dengan daya beda rendah (r < 0.20):*", paste(problem_items, collapse = ", "), "\\n\\n")
   }
+  if ("reversed" %in% names(ia)) {
+    rev_items <- ia$Item[ia$reversed == TRUE]
+    if (length(rev_items) > 0) {
+      cat("*Item berkorelasi negatif (di-reverse):*", paste(rev_items, collapse = ", "), "\\n\\n")
+    }
+  }
   
   cat("\\n\\newpage\\n")
 }
@@ -1137,6 +1152,17 @@ for (s in names(subtests)) {
       Nilai = low_disc$r_item_total, stringsAsFactors = FALSE))
   }
   
+  # Item berkorelasi negatif (di-reverse)
+  if ("reversed" %in% names(ia)) {
+    rev_items <- ia[ia$reversed == TRUE, ]
+    if (nrow(rev_items) > 0) {
+      problem_df <- rbind(problem_df, data.frame(
+        Subtes = s, Item = rev_items$Item,
+        Masalah = "Korelasi negatif (reversed)",
+        Nilai = rev_items$r_item_total, stringsAsFactors = FALSE))
+    }
+  }
+
   # Item terlalu mudah / sulit (untuk dikotomis)
   if ("p_difficulty" %in% names(ia)) {
     too_easy <- ia[ia$p_difficulty > 0.95, ]
