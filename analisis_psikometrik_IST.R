@@ -186,7 +186,7 @@ item_analysis_ctt <- function(data_items, subtes_name) {
   ia <- suppressWarnings(psych::alpha(data_items, check.keys = TRUE))
 
   # Identifikasi item yang di-reverse oleh check.keys
-  reversed_items <- names(which(ia$keys == -1))
+  reversed_items <- names(which(unlist(ia$keys) == -1))
   if (length(reversed_items) > 0) {
     cat("   [CATATAN] Item berkorelasi negatif (di-reverse untuk analisis):",
         paste(reversed_items, collapse = ", "), "\n")
