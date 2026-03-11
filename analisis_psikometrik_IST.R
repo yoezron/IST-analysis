@@ -582,17 +582,15 @@ cat("   Membuat grafik IRT...\n")
 for (s in names(subtests)) {
   if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
     pdf(paste0("output_ist/grafik/04_ICC_", s, ".pdf"), width = 12, height = 8)
-    
+
     if (irt_results[[s]]$type == "dikotomis") {
-      # ICC dari model 2PL
-      plot(irt_results[[s]]$twopl, type = "trace",
-           main = paste("Item Characteristic Curves -", s, "(2PL)"),
-           par.settings = list(superpose.line = list(lwd = 2)))
+      print(plot(irt_results[[s]]$twopl, type = "trace",
+                 main = paste("Item Characteristic Curves -", s, "(2PL)"),
+                 par.settings = list(superpose.line = list(lwd = 2))))
     } else {
-      # ICC dari model GRM
-      plot(irt_results[[s]]$grm, type = "trace",
-           main = paste("Category Response Curves -", s, "(GRM)"),
-           par.settings = list(superpose.line = list(lwd = 2)))
+      print(plot(irt_results[[s]]$grm, type = "trace",
+                 main = paste("Category Response Curves -", s, "(GRM)"),
+                 par.settings = list(superpose.line = list(lwd = 2))))
     }
     dev.off()
   }
@@ -602,10 +600,10 @@ for (s in names(subtests)) {
 for (s in names(subtests)) {
   if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
     pdf(paste0("output_ist/grafik/05_IIF_", s, ".pdf"), width = 12, height = 8)
-    
+
     mod <- if (irt_results[[s]]$type == "dikotomis") irt_results[[s]]$twopl else irt_results[[s]]$grm
-    plot(mod, type = "infotrace",
-         main = paste("Item Information Functions -", s))
+    print(plot(mod, type = "infotrace",
+               main = paste("Item Information Functions -", s)))
     dev.off()
   }
 }
@@ -1527,6 +1525,413 @@ tryCatch({
 })
 
 # ==============================================================================
+# 8b. LAPORAN KESELURUHAN ANALISIS (PLAIN TEXT)
+# ==============================================================================
+
+cat("\n>>> [6b] Membuat laporan keseluruhan analisis...\n")
+
+laporan_lines <- c()
+ln <- function(...) laporan_lines <<- c(laporan_lines, paste0(...))
+ln_sep <- function() ln(paste(rep("=", 80), collapse = ""))
+ln_sub <- function() ln(paste(rep("-", 60), collapse = ""))
+
+ln_sep()
+ln("  LAPORAN KESELURUHAN ANALISIS PSIKOMETRIK")
+ln("  INTELLIGENZ STRUKTUR TEST (IST)")
+ln_sep()
+ln("  Tanggal analisis: ", format(Sys.Date(), "%d %B %Y"))
+ln("  Jumlah responden: ", nrow(data_raw))
+ln("  Jumlah item total: ", length(unlist(subtests)))
+ln("  Jumlah subtes    : ", length(subtests))
+ln_sep()
+ln("")
+
+# --- A. Deskripsi Sampel ---
+ln("A. DESKRIPSI SAMPEL")
+ln_sub()
+ln("")
+ln("  A.1 Jenis Kelamin:")
+tbl_jk <- table(data_raw$jk)
+for (nm in names(tbl_jk)) {
+  ln("      ", nm, ": ", tbl_jk[nm], " (", round(tbl_jk[nm]/sum(tbl_jk)*100, 1), "%)")
+}
+ln("")
+ln("  A.2 Kelompok Usia:")
+tbl_usia <- table(data_raw$rentus)
+for (nm in names(tbl_usia)) {
+  ln("      ", nm, ": ", tbl_usia[nm], " (", round(tbl_usia[nm]/sum(tbl_usia)*100, 1), "%)")
+}
+ln("")
+ln("  A.3 Pendidikan:")
+tbl_pend <- table(data_raw$pendidikan)
+for (nm in names(tbl_pend)) {
+  ln("      ", nm, ": ", tbl_pend[nm], " (", round(tbl_pend[nm]/sum(tbl_pend)*100, 1), "%)")
+}
+ln("")
+
+# --- B. Statistik Deskriptif Skor ---
+ln("B. STATISTIK DESKRIPTIF SKOR PER SUBTES")
+ln_sub()
+ln("")
+ln(sprintf("  %-6s %-40s %5s %6s %6s %6s %6s %8s %8s",
+           "Subtes", "Nama", "n", "Min", "Max", "Mean", "SD", "Skewness", "Kurtosis"))
+ln(paste(rep("-", 100), collapse = ""))
+for (s in names(subtests)) {
+  skor <- data_raw[[paste0("skor_", s)]]
+  desc <- psych::describe(skor)
+  ln(sprintf("  %-6s %-40s %5d %6.1f %6.1f %6.2f %6.2f %8.3f %8.3f",
+             s, subtest_names[s], length(skor),
+             min(skor, na.rm = TRUE), max(skor, na.rm = TRUE),
+             mean(skor, na.rm = TRUE), sd(skor, na.rm = TRUE),
+             desc$skew, desc$kurtosis))
+}
+skor_total <- data_raw$skor_total
+desc_total <- psych::describe(skor_total)
+ln(paste(rep("-", 100), collapse = ""))
+ln(sprintf("  %-6s %-40s %5d %6.1f %6.1f %6.2f %6.2f %8.3f %8.3f",
+           "TOTAL", "Skor Total IST", length(skor_total),
+           min(skor_total, na.rm = TRUE), max(skor_total, na.rm = TRUE),
+           mean(skor_total, na.rm = TRUE), sd(skor_total, na.rm = TRUE),
+           desc_total$skew, desc_total$kurtosis))
+ln("")
+
+# --- C. Reliabilitas ---
+ln("C. RELIABILITAS (CRONBACH'S ALPHA)")
+ln_sub()
+ln("")
+ln(sprintf("  %-6s %5s %7s %9s %8s %8s %6s  %-15s",
+           "Subtes", "n", "Alpha", "Alpha Std", "Mean rit", "SEM", "SH", "Interpretasi"))
+ln(paste(rep("-", 85), collapse = ""))
+for (i in 1:nrow(reliability_summary)) {
+  r <- reliability_summary[i, ]
+  interp <- ifelse(r$Alpha >= 0.9, "Sangat Baik",
+            ifelse(r$Alpha >= 0.8, "Baik",
+            ifelse(r$Alpha >= 0.7, "Memadai",
+            ifelse(r$Alpha >= 0.6, "Cukup",
+            ifelse(r$Alpha >= 0.5, "Kurang", "Rendah")))))
+  sh_val <- tryCatch(round(ctt_results[[r$Subtes]]$split_half$maxrb, 3), error = function(e) NA)
+  ln(sprintf("  %-6s %5d %7.3f %9.3f %8.3f %8.2f %6s  %-15s",
+             r$Subtes, r$Jumlah_Item, r$Alpha, r$Alpha_Std, r$Mean_r_IT, r$SEM,
+             ifelse(is.na(sh_val), "N/A", as.character(sh_val)), interp))
+}
+ln("")
+
+# --- D. Analisis Butir Aitem Komprehensif ---
+ln("D. ANALISIS BUTIR AITEM PER SUBTES")
+ln_sub()
+ln("")
+
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+
+  ln("  D.", match(s, names(subtests)), " Subtes ", s, " - ", subtest_names[s])
+  ln("  Alpha: ", round(ctt_results[[s]]$alpha$total$raw_alpha, 3),
+     " | Jumlah item: ", nrow(ia))
+  ln("")
+
+  # Header tabel
+  has_p <- "p_difficulty" %in% names(ia)
+  if (has_p) {
+    ln(sprintf("  %-7s %6s %6s %7s %7s %7s %7s %7s %7s %7s %-12s %-10s",
+               "Item", "Mean", "SD", "r(pbis)", "r(it)", "p_up", "p_low", "D-idx",
+               "RelIdx", "AlpDel", "Kat.Diff", "Keputusan"))
+  } else {
+    ln(sprintf("  %-7s %6s %6s %7s %7s %7s %7s %7s %7s %7s %-10s",
+               "Item", "Mean", "SD", "r(pbis)", "r(it)", "p_up", "p_low", "D-idx",
+               "RelIdx", "AlpDel", "Keputusan"))
+  }
+  ln(paste("  ", paste(rep("-", 110), collapse = ""), sep = ""))
+
+  for (j in 1:nrow(ia)) {
+    row <- ia[j, ]
+    rev_mark <- ifelse(row$reversed, " *", "")
+    if (has_p) {
+      diff_cat <- substr(row$kategori_difficulty, 1, 12)
+      ln(sprintf("  %-7s %6.3f %6.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %-12s %-10s%s",
+                 row$Item, row$Mean, row$SD, row$r_pbis, row$r_item_total,
+                 row$p_upper, row$p_lower, row$D_index,
+                 row$item_rel_index, row$alpha_if_deleted,
+                 diff_cat, row$keputusan, rev_mark))
+    } else {
+      ln(sprintf("  %-7s %6.3f %6.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %7.3f %-10s%s",
+                 row$Item, row$Mean, row$SD, row$r_pbis, row$r_item_total,
+                 row$p_upper, row$p_lower, row$D_index,
+                 row$item_rel_index, row$alpha_if_deleted,
+                 row$keputusan, rev_mark))
+    }
+  }
+
+  # Ringkasan per subtes
+  ln("")
+  ln("  Ringkasan: Diterima=", sum(ia$keputusan == "Diterima"),
+     " | Direvisi=", sum(ia$keputusan == "Direvisi"),
+     " | Ditolak=", sum(ia$keputusan == "Ditolak"))
+  ln("  Mean D-index=", round(mean(ia$D_index, na.rm = TRUE), 3),
+     " | Mean r(pbis)=", round(mean(ia$r_pbis, na.rm = TRUE), 3),
+     " | Mean r(it)=", round(mean(ia$r_item_total, na.rm = TRUE), 3))
+
+  # Inter-item
+  if (!is.null(ctt_results[[s]]$inter_item_cor)) {
+    iic <- ctt_results[[s]]$inter_item_cor
+    diag(iic) <- NA
+    ln("  Mean inter-item r=", round(mean(iic, na.rm = TRUE), 3),
+       " | Min=", round(min(iic, na.rm = TRUE), 3),
+       " | Max=", round(max(iic, na.rm = TRUE), 3))
+  }
+
+  rev_items <- ia$Item[ia$reversed == TRUE]
+  if (length(rev_items) > 0) {
+    ln("  * Item reversed: ", paste(rev_items, collapse = ", "))
+  }
+  ln("")
+}
+
+# --- E. Ringkasan Kualitas Item Keseluruhan ---
+ln("E. RINGKASAN KUALITAS ITEM SELURUH SUBTES")
+ln_sub()
+ln("")
+ln(sprintf("  %-6s %5s %8s %8s %7s %8s %9s %8s %8s",
+           "Subtes", "n", "Diterima", "Direvisi", "Ditolak", "Mean D", "Mean rpbis", "Mean rit", "Mean IIC"))
+ln(paste(rep("-", 85), collapse = ""))
+for (i in 1:nrow(item_quality_summary)) {
+  q <- item_quality_summary[i, ]
+  ln(sprintf("  %-6s %5d %8d %8d %7d %8.3f %9.3f %8.3f %8.3f",
+             q$Subtes, q$Jumlah_Item, q$Diterima, q$Direvisi, q$Ditolak,
+             q$Mean_D_Index, q$Mean_r_pbis, q$Mean_r_it_corrected, q$Mean_Inter_Item_r))
+}
+ln(paste(rep("-", 85), collapse = ""))
+ln(sprintf("  %-6s %5d %8d %8d %7d",
+           "TOTAL", total_items, total_accepted, total_revised, total_rejected))
+ln(sprintf("  Persentase: Diterima %.1f%% | Direvisi %.1f%% | Ditolak %.1f%%",
+           total_accepted/total_items*100, total_revised/total_items*100, total_rejected/total_items*100))
+ln("")
+
+# --- F. IRT ---
+ln("F. ANALISIS ITEM RESPONSE THEORY (IRT)")
+ln_sub()
+ln("")
+
+for (s in names(subtests)) {
+  if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
+    ln("  F.", match(s, names(subtests)), " Subtes ", s, " - ", subtest_names[s])
+
+    if (irt_results[[s]]$type == "dikotomis") {
+      params <- as.data.frame(irt_results[[s]]$twopl_params)
+      ln(sprintf("  %-7s %10s %10s", "Item", "a (Disc)", "b (Diff)"))
+      ln(paste("  ", paste(rep("-", 30), collapse = "")))
+      for (j in 1:nrow(params)) {
+        ln(sprintf("  %-7s %10.3f %10.3f", rownames(params)[j], params$a[j], params$b[j]))
+      }
+
+      # Model comparison
+      if (!is.null(irt_results[[s]]$anova)) {
+        av <- irt_results[[s]]$anova
+        ln("")
+        ln("  Perbandingan: AIC Rasch=", round(av$AIC[1], 1),
+           " | AIC 2PL=", round(av$AIC[2], 1))
+        ln("                BIC Rasch=", round(av$BIC[1], 1),
+           " | BIC 2PL=", round(av$BIC[2], 1))
+        if (!is.na(av$p[2])) {
+          ln("  LRT p-value: ", round(av$p[2], 4),
+             ifelse(av$p[2] < 0.05, " => 2PL lebih baik", " => Rasch cukup memadai"))
+        }
+      }
+
+      # Model fit M2
+      if (!is.null(irt_results[[s]]$twopl_m2)) {
+        m2 <- irt_results[[s]]$twopl_m2
+        ln("  Model Fit 2PL: RMSEA=", round(m2$RMSEA, 4),
+           " | SRMSR=", round(m2$SRMSR, 4),
+           " | TLI=", round(m2$TLI, 4),
+           " | CFI=", round(m2$CFI, 4))
+      }
+
+      # Item fit misfit
+      fit_df <- irt_results[[s]]$twopl_fit
+      misfit <- fit_df[fit_df$p.S_X2 < 0.05, ]
+      if (nrow(misfit) > 0) {
+        ln("  Item MISFIT (p < 0.05): ", paste(misfit$item, collapse = ", "))
+      } else {
+        ln("  Semua item FIT (p >= 0.05)")
+      }
+
+    } else {
+      params <- as.data.frame(irt_results[[s]]$grm_params)
+      param_names <- colnames(params)
+      header <- sprintf("  %-7s", "Item")
+      for (pn in param_names) header <- paste0(header, sprintf(" %8s", pn))
+      ln(header)
+      ln(paste("  ", paste(rep("-", 8 + 9 * length(param_names)), collapse = "")))
+      for (j in 1:nrow(params)) {
+        row_str <- sprintf("  %-7s", rownames(params)[j])
+        for (pn in param_names) row_str <- paste0(row_str, sprintf(" %8.3f", params[j, pn]))
+        ln(row_str)
+      }
+
+      fit_df <- irt_results[[s]]$grm_fit
+      misfit <- fit_df[fit_df$p.S_X2 < 0.05, ]
+      if (nrow(misfit) > 0) {
+        ln("  Item MISFIT (p < 0.05): ", paste(misfit$item, collapse = ", "))
+      } else {
+        ln("  Semua item FIT (p >= 0.05)")
+      }
+    }
+    ln("")
+  } else if (!is.null(irt_results[[s]]) && !is.null(irt_results[[s]]$error)) {
+    ln("  F.", match(s, names(subtests)), " Subtes ", s, " - GAGAL: ", irt_results[[s]]$error)
+    ln("")
+  }
+}
+
+# --- G. Analisis Struktur Faktor ---
+ln("G. ANALISIS STRUKTUR FAKTOR")
+ln_sub()
+ln("")
+
+# Korelasi
+ln("  G.1 Korelasi Antar Subtes")
+ln("")
+header_cor <- sprintf("  %-6s", "")
+for (s in names(subtests)) header_cor <- paste0(header_cor, sprintf(" %6s", s))
+ln(header_cor)
+for (s1 in names(subtests)) {
+  row_str <- sprintf("  %-6s", s1)
+  for (s2 in names(subtests)) row_str <- paste0(row_str, sprintf(" %6.3f", cor_matrix[s1, s2]))
+  ln(row_str)
+}
+ln("")
+
+# KMO
+ln("  G.2 KMO = ", round(kmo_res$MSA, 3))
+ln("")
+
+# EFA
+ln("  G.3 EFA (3 Faktor, Varimax)")
+loadings_mat <- unclass(efa_result$loadings)
+header_efa <- sprintf("  %-6s", "")
+for (cn in colnames(loadings_mat)) header_efa <- paste0(header_efa, sprintf(" %8s", cn))
+header_efa <- paste0(header_efa, sprintf(" %10s", "Communal."))
+ln(header_efa)
+for (rn in rownames(loadings_mat)) {
+  row_str <- sprintf("  %-6s", rn)
+  for (cn in colnames(loadings_mat)) row_str <- paste0(row_str, sprintf(" %8.3f", loadings_mat[rn, cn]))
+  row_str <- paste0(row_str, sprintf(" %10.3f", efa_result$communality[rn]))
+  ln(row_str)
+}
+ln("")
+
+# CFA
+if (!is.null(cfa_fit)) {
+  ln("  G.4 CFA Model 3-Faktor (Verbal: SE+WA+AN+GE | Numerik: RA+ZR+ME | Figural: FA+WU)")
+  fit_idx <- fitMeasures(cfa_fit, c("chisq","df","pvalue","cfi","tli","rmsea","srmr"))
+  ln(sprintf("  Chi-sq=%.2f (df=%d, p=%.4f) | CFI=%.4f | TLI=%.4f | RMSEA=%.4f | SRMR=%.4f",
+             fit_idx["chisq"], fit_idx["df"], fit_idx["pvalue"],
+             fit_idx["cfi"], fit_idx["tli"], fit_idx["rmsea"], fit_idx["srmr"]))
+
+  std_loads <- lavaan::standardizedSolution(cfa_fit)
+  loadings_cfa <- std_loads[std_loads$op == "=~", ]
+  ln("")
+  ln(sprintf("  %-10s %-6s %8s %8s %10s", "Faktor", "Subtes", "Loading", "SE", "p-value"))
+  ln(paste("  ", paste(rep("-", 45), collapse = "")))
+  for (j in 1:nrow(loadings_cfa)) {
+    lc <- loadings_cfa[j, ]
+    ln(sprintf("  %-10s %-6s %8.3f %8.3f %10.4f", lc$lhs, lc$rhs, lc$est.std, lc$se, lc$pvalue))
+  }
+} else {
+  ln("  G.4 CFA tidak dapat diestimasi.")
+}
+ln("")
+
+# --- H. Item Bermasalah ---
+ln("H. DAFTAR ITEM BERMASALAH")
+ln_sub()
+ln("")
+
+all_problems <- data.frame(Subtes = character(), Item = character(),
+                           Masalah = character(), stringsAsFactors = FALSE)
+for (s in names(subtests)) {
+  ia <- ctt_results[[s]]$item_analysis
+  rejected <- ia[ia$keputusan == "Ditolak", ]
+  if (nrow(rejected) > 0) {
+    all_problems <- rbind(all_problems, data.frame(
+      Subtes = s, Item = rejected$Item,
+      Masalah = paste0("DITOLAK (r_it=", rejected$r_item_total, ", D=", rejected$D_index, ")"),
+      stringsAsFactors = FALSE))
+  }
+  revised <- ia[ia$keputusan == "Direvisi", ]
+  if (nrow(revised) > 0) {
+    all_problems <- rbind(all_problems, data.frame(
+      Subtes = s, Item = revised$Item,
+      Masalah = paste0("REVISI (r_it=", revised$r_item_total, ", D=", revised$D_index, ")"),
+      stringsAsFactors = FALSE))
+  }
+  if ("p_difficulty" %in% names(ia)) {
+    extreme <- ia[ia$p_difficulty > 0.95 | ia$p_difficulty < 0.05, ]
+    if (nrow(extreme) > 0) {
+      all_problems <- rbind(all_problems, data.frame(
+        Subtes = s, Item = extreme$Item,
+        Masalah = paste0("Ekstrem (p=", extreme$p_difficulty, ")"),
+        stringsAsFactors = FALSE))
+    }
+  }
+  if ("reversed" %in% names(ia)) {
+    rev_i <- ia[ia$reversed == TRUE, ]
+    if (nrow(rev_i) > 0) {
+      all_problems <- rbind(all_problems, data.frame(
+        Subtes = s, Item = rev_i$Item,
+        Masalah = "Korelasi negatif (reversed)",
+        stringsAsFactors = FALSE))
+    }
+  }
+  # IRT misfit
+  if (!is.null(irt_results[[s]]) && is.null(irt_results[[s]]$error)) {
+    fit_df <- if (irt_results[[s]]$type == "dikotomis") irt_results[[s]]$twopl_fit else irt_results[[s]]$grm_fit
+    misfit_items <- fit_df[fit_df$p.S_X2 < 0.05, ]
+    if (nrow(misfit_items) > 0) {
+      all_problems <- rbind(all_problems, data.frame(
+        Subtes = s, Item = misfit_items$item,
+        Masalah = paste0("IRT Misfit (p=", round(misfit_items$p.S_X2, 4), ")"),
+        stringsAsFactors = FALSE))
+    }
+  }
+}
+
+if (nrow(all_problems) > 0) {
+  # Deduplicate
+  all_problems <- all_problems[!duplicated(paste(all_problems$Subtes, all_problems$Item, all_problems$Masalah)), ]
+  ln(sprintf("  %-6s %-7s %s", "Subtes", "Item", "Masalah"))
+  ln(paste("  ", paste(rep("-", 70), collapse = "")))
+  for (j in 1:nrow(all_problems)) {
+    ln(sprintf("  %-6s %-7s %s", all_problems$Subtes[j], all_problems$Item[j], all_problems$Masalah[j]))
+  }
+  ln("")
+  ln("  Total item bermasalah (unik): ", length(unique(paste(all_problems$Subtes, all_problems$Item))))
+} else {
+  ln("  Tidak ditemukan item bermasalah.")
+}
+ln("")
+
+# --- I. Rekomendasi ---
+ln("I. REKOMENDASI")
+ln_sub()
+ln("")
+ln("  1. Item DITOLAK (r_it < 0.10 atau D < 0.10): hapus atau tulis ulang.")
+ln("  2. Item DIREVISI (r_it 0.10-0.20 atau D 0.10-0.20): tinjau konten & distraktor.")
+ln("  3. Item terlalu mudah/sulit (p > 0.95 atau p < 0.05): revisi tingkat kesulitan.")
+ln("  4. Item IRT misfit: evaluasi kesesuaian dengan konstruk yang diukur.")
+ln("  5. Subtes Alpha < 0.70: tambah item berkualitas atau revisi item lemah.")
+ln("  6. Konfirmasi struktur 3-faktor dengan sampel lebih besar.")
+ln("")
+ln_sep()
+ln("  Laporan ini dihasilkan secara otomatis menggunakan R.")
+ln("  ", format(Sys.Date(), "%d %B %Y"))
+ln_sep()
+
+# Tulis file
+writeLines(laporan_lines, "output_ist/Laporan_Keseluruhan_Analisis_IST.txt")
+cat(">>> LAPORAN KESELURUHAN BERHASIL DIBUAT: output_ist/Laporan_Keseluruhan_Analisis_IST.txt\n")
+
+# ==============================================================================
 # 9. SIMPAN HASIL ANALISIS KE FILE
 # ==============================================================================
 
@@ -1577,7 +1982,8 @@ cat("============================================================\n")
 cat("  File output tersedia di folder: output_ist/              \n")
 cat("                                                            \n")
 cat("  Isi folder:                                               \n")
-cat("  - Laporan_Psikometrik_IST.pdf    (Laporan lengkap)       \n")
+cat("  - Laporan_Psikometrik_IST.pdf    (Laporan PDF lengkap)    \n")
+cat("  - Laporan_Keseluruhan_Analisis_IST.txt (Laporan ringkasan)\n")
 cat("  - laporan_psikometrik_IST.Rmd    (File source Rmd)       \n")
 cat("  - reliabilitas_summary.csv                                \n")
 cat("  - item_quality_summary.csv       (ringkasan kualitas)    \n")
